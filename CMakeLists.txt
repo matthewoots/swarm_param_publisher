@@ -11,9 +11,6 @@ find_package(catkin
   roscpp
   std_msgs
   common_msgs
-  tf
-  tf2_ros
-  tf2_sensor_msgs
   pcl
   pcl_ros
 )
@@ -33,8 +30,6 @@ catkin_package(
   roscpp 
   std_msgs 
   common_msgs
-  tf
-  tf2_ros
   pcl
   
   DEPENDS

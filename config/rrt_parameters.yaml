@@ -1,0 +1,33 @@
+# Solo RRT Parameters
+solo: {
+  step_size: 0.9,
+  obs_threshold: 0.25,
+
+  xybuffer: 0.0,
+  zbuffer: 2.5,
+  passage_size: 3.0,
+
+  min_height: 1.0,
+  max_height: 2.3,
+
+  max_tries: 25,
+  timeout: 1.0,
+  z_scale: 1.0
+}
+
+# Formation RRT Parameters
+formation: {
+  step_size: 2.0,
+  obs_threshold: 5.4,
+
+  xybuffer: 0.0,
+  zbuffer: 4.75,
+  passage_size: 0.25,
+
+  min_height: 1.0,
+  max_height: 4.75,
+
+  max_tries: 25,
+  timeout: 1.0,
+  z_scale: 5.4
+}

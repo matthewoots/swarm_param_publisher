@@ -35,16 +35,11 @@
 #include <geometry_msgs/Quaternion.h>
 #include <geometry_msgs/Vector3.h>
 
-#include <tf2_sensor_msgs/tf2_sensor_msgs.h>
-#include <tf2/LinearMath/Quaternion.h>
-#include <tf2_geometry_msgs/tf2_geometry_msgs.h>
-
 #include <pcl_ros/point_cloud.h>
 #include <pcl/point_types.h>
 #include <pcl/conversions.h>
 
-#include <dynamic_reconfigure/server.h>
-#include "pcl_ros_lib/pcl_parametersConfig.h"
+#include <std_msgs/Float32MultiArray.h>
 
 #define KNRM  "\033[0m"
 #define KRED  "\033[31m"
@@ -57,176 +52,63 @@
 
 using namespace std;
 
+#define param_size 10
+
 class ros_node_class
 {
 private:
     ros::NodeHandle _nh;
-    ros::Publisher full_pcl_pub, altered_pcl_pub, cluster_pcl_pub, 
-        object_point_pub, cluster_array_pub;
+    ros::Publisher pcl_pub, solo_setting_pub, formation_setting_pub;
+    std::string _file_location;
 
 public:
-    sensor_msgs::PointCloud2 pcl_original;
-    sensor_msgs::PointCloud2 pcl_altered;
-    sensor_msgs::PointCloud2 pcl_clustered;
-    vector<geometry_msgs::Point> center_points;
-    pcl::PointCloud<pcl::PointXYZ>::Ptr pc;
 
-    vector<pcl::PointCloud<pcl::PointXYZ>::Ptr> main_store_cluster_pc;
-
-    double _resolution; // Resolution of octree
-    Vector3d _translate, _rotate; // In degrees
-    Vector3d _max, _min;
-    int _nearest_min_distance;
-    double _eps; // The radius for searching neighbor points of octree
-    int _min_cluster_pts;
-
-    bool ready_to_load;
-
+    double f_v[param_size], s_v[param_size];
 
     ros_node_class(ros::NodeHandle &nodeHandle)
     {
         pcl_pub = _nh.advertise<sensor_msgs::PointCloud2>("/param/pcl", 10);
-        formation_setting_pub = _nh.subscribe<std_msgs::Float32MultiArray>("/param/formation_settings", 10);
-        solo_setting_pub = _nh.subscribe<std_msgs::Float32MultiArray>("/param/solo_settings", 10);
+        formation_setting_pub = _nh.advertise<std_msgs::Float32MultiArray>("/param/formation_settings", 10);
+        solo_setting_pub = _nh.advertise<std_msgs::Float32MultiArray>("/param/solo_settings", 10);
+
+        std::string node_name = ros::this_node::getName();
+        _nh.param<std::string>("/" + node_name + "/pcd_file_location", _file_location, "/cloud.pcd");
+
+        _nh.param<double>("/" + node_name + "/formation/step_size", f_v[0], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/step_size", s_v[0], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/obs_threshold", f_v[1], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/obs_threshold", s_v[1], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/xybuffer", f_v[2], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/xybuffer", s_v[2], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/zbuffer", f_v[3], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/zbuffer", s_v[3], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/passage_size", f_v[4], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/passage_size", s_v[4], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/min_height", f_v[5], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/min_height", s_v[5], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/max_height", f_v[6], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/max_height", s_v[6], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/max_tries", f_v[7], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/max_tries", s_v[7], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/timeout", f_v[8], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/timeout", s_v[8], 1.0);
+
+        _nh.param<double>("/" + node_name + "/formation/z_scale", f_v[9], 1.0);
+        _nh.param<double>("/" + node_name + "/solo/z_scale", s_v[9], 1.0);
 
         printf("%s[main.cpp] Constructor Setup Ready! \n", KGRN);
     }
     ~ros_node_class(){};
 
-    void dynamic_reconfigure_server(pcl_ros_lib::pcl_parametersConfig &config, uint32_t level)
-    {
-        ROS_INFO("Reconfigure Request [octree]: %f %f %d %d", 
-            config.resolution, config.eps, 
-            config.nearest_min_distance, config.min_cluster_pts);
-        // ROS_INFO("Reconfigure Request [transform]: [%f %f %f] [%f %f %f]", 
-        //     config.x, config.y, config.z, 
-        //     config.roll, config.pitch, config.yaw);
-        
-        // Only if next iteration, cannot corrupt the previous data
-
-        _resolution = config.resolution;
-        _eps = config.eps;
-        _nearest_min_distance = config.nearest_min_distance;
-        _min_cluster_pts = config.min_cluster_pts;
-
-        _translate = Vector3d (config.x, config.y, config.z);
-        // _rotate = Vector3d (config.roll, config.pitch, config.yaw);
-        _max = Vector3d (config.max_x, config.max_y, config.max_z);
-        _min = Vector3d (config.min_x, config.min_y, config.min_z);
-
-        ready_to_load = true;
-    }
-
-    void full_pcl_publisher() 
-    {
-        pcl_original.header.frame_id = "/map";
-        full_pcl_pub.publish(pcl_original); 
-        // printf("%s[main.cpp] Published full_cloud! \n", KGRN);
-    }
-
-    void altered_pcl_publisher() 
-    {
-        pcl_altered.header.frame_id = "/map";
-        altered_pcl_pub.publish(pcl_altered); 
-        // printf("%s[main.cpp] Published altered_cloud! \n", KGRN);
-    }
-
-    void cluster_pcl_publisher() 
-    {
-        pcl_clustered.header.frame_id = "/map";
-        cluster_pcl_pub.publish(pcl_clustered); 
-        // printf("%s[main.cpp] Published clustered_cloud! \n", KGRN);
-    }
-
-    void object_center_publisher() 
-    {
-        pcl_ros_lib::point_array msg;
-        for (int i = 0; i < center_points.size(); i++)
-            msg.array.push_back(center_points[i]);
-
-        object_point_pub.publish(msg); 
-        // printf("%s[main.cpp] Published object_point! \n", KGRN);
-    }
-
-    void custom_cluster_publisher()
-    {
-        pcl_ros_lib::pointcloud2_array msg;
-        for (int i=0; i < main_store_cluster_pc.size(); i++)
-        {
-            sensor_msgs::PointCloud2 pcl_cluster = _common.pcl2ros_converter(main_store_cluster_pc[i]);
-            msg.array.push_back(pcl_cluster);
-        }
-        cluster_array_pub.publish(msg);
-    }
-};
-
-int main(int argc, char **argv)
-{
-    ros::init(argc, argv, "swarm_param_node");
-    ros::NodeHandle _nh("~"); 
-    ros_node_class ros_node_class(_nh);
-    
-    // ROS Params
-    std::string _file_location;
-
-    double _ros_rate;
-
-    bool _crop, _transform, _cluster;
-    bool _spin_once;
-
-    _nh.param<std::string>("file_location", _file_location, "/cloud.pcd");
-    _nh.param<double>("resolution", ros_node_class._resolution, 1.0);
-    _nh.param<double>("eps", ros_node_class._eps, 0.05);
-    _nh.param<int>("nearest_min_distance", ros_node_class._nearest_min_distance, 5);
-    _nh.param<int>("min_cluster_pts", ros_node_class._min_cluster_pts, 50);
-
-    _nh.param<bool>("spin_once", _spin_once, true);
-    _nh.param<double>("ros_rate", _ros_rate, 1.0);
-    
-    _nh.param<double>("translate_x", ros_node_class._translate.x(), 0.0);
-    _nh.param<double>("translate_y", ros_node_class._translate.y(), 0.0);
-    _nh.param<double>("translate_z", ros_node_class._translate.z(), 0.0);
-
-    _nh.param<double>("rotate_roll", ros_node_class._rotate.x(), 0.0);
-    _nh.param<double>("rotate_pitch", ros_node_class._rotate.y(), 0.0);
-    _nh.param<double>("rotate_yaw", ros_node_class._rotate.z(), 0.0);
-
-    _nh.param<double>("min_x", ros_node_class._min.x(), 0.0);
-    _nh.param<double>("min_y", ros_node_class._min.y(), 0.0);
-    _nh.param<double>("min_z", ros_node_class._min.z(), 0.0);
-
-    _nh.param<double>("max_x", ros_node_class._max.x(), 0.0);
-    _nh.param<double>("max_y", ros_node_class._max.y(), 0.0);
-    _nh.param<double>("max_z", ros_node_class._max.z(), 0.0);
-
-    _nh.param<bool>("crop", _crop, false);
-    _nh.param<bool>("transform", _transform, false);
-    _nh.param<bool>("cluster", _cluster, false);
-
-    ros::Rate loop_rate(_ros_rate);
-
-    pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>); // Initialize the point cloud
-    
-    pcl::io::loadPCDFile<pcl::PointXYZ>(_file_location, *cloud);// Load the pcd file
-    printf("%s[main.cpp] Loaded .pcd cloud from %s\n", KGRN, _file_location.c_str());
-
-    // Full Cloud
-    sensor_msgs::PointCloud2 full_cloud = _common.pcl2ros_converter(cloud);
-    printf("%s[main.cpp] Completed full_cloud to ROS message\n", KGRN);
-
-    double _resolution = ros_node_class._resolution; 
-
-    Vector3d _translate = ros_node_class._translate; 
-    Vector3d _rotate = ros_node_class._rotate;
-
-    Vector3d _min = ros_node_class._min;
-    Vector3d _max = ros_node_class._max;
-
-    int _nearest_min_distance = ros_node_class._nearest_min_distance;
-    double _eps = ros_node_class._eps; // The radius for searching neighbor points of octree
-    int _min_cluster_pts = ros_node_class._min_cluster_pts;
-
-    while (ros::ok())
+    void pcl_publisher() 
     {
         // Convert point cloud from pcl point ptr to ROS sensor message
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>); // Initialize the point cloud
@@ -235,141 +117,46 @@ int main(int argc, char **argv)
         printf("%s[main.cpp] Loaded .pcd cloud from %s\n", KGRN, _file_location.c_str());
 
         sensor_msgs::PointCloud2 full_cloud;
-        pcl::toROSMsg(*full_cloud, ros_msg);
+        pcl::toROSMsg(*cloud, full_cloud);
         printf("%s[main.cpp] Completed cloud to ROS message\n", KGRN);
-        
-        ros_node_class.full_pcl_publisher(full_cloud);
 
+        full_cloud.header.stamp = ros::Time::now();
+        full_cloud.header.frame_id = "/map";
+        pcl_pub.publish(full_cloud); 
+    }
 
-        dbscan _dbscan;
-        if (ros_node_class.ready_to_load)
+    void rrt_param_publisher()
+    {
+        std_msgs::Float32MultiArray formation, solo;
+        for (int i = 0; i < param_size; i++)
         {
-            // Only update from every cycle to not corrupt the data inbetween
-            _resolution = ros_node_class._resolution; 
-
-            _translate = ros_node_class._translate; 
-            // _rotate = ros_node_class._rotate;
-            _max = ros_node_class._max;
-            _min = ros_node_class._min;
-            
-            _nearest_min_distance = ros_node_class._nearest_min_distance;
-            _eps = ros_node_class._eps; // The radius for searching neighbor points of octree
-            _min_cluster_pts = ros_node_class._min_cluster_pts;
-
-            ros_node_class.ready_to_load = false;
-            printf("%s[main.cpp] Loaded from rqt_reconfigure\n", KGRN);
-
+            formation.data.push_back(f_v[i]);
+            solo.data.push_back(s_v[i]);
         }
-        sensor_msgs::PointCloud2 clear;
-        ros_node_class.pcl_altered = clear;
-        ros_node_class.pcl_clustered = clear;
-        ros_node_class.pcl_original = clear;
 
-        ros_node_class.main_store_cluster_pc.clear();
-        ros_node_class.center_points.clear();
-        pcl::PointCloud<pcl::PointXYZ>::Ptr db_pcl_cloud(new pcl::PointCloud<pcl::PointXYZ>); // Initialize the db point cloud
+        formation_setting_pub.publish(formation);
+        solo_setting_pub.publish(solo);
+    }
 
-        // Transform Cloud
-        sensor_msgs::PointCloud2 transformed_cloud;
-        geometry_msgs::TransformStamped transform;
-        geometry_msgs::Vector3 trans;
-        geometry_msgs::Quaternion q;
-        tf2::Quaternion quat_tf;
+};
 
-        double deg2rad = 1.0 / 180.0 * 3.1415926535;
+int main(int argc, char **argv)
+{
+    int count = 0;
+    ros::init(argc, argv, "swarm_param_node");
+    ros::NodeHandle _nh("~"); 
+    ros_node_class ros_node_class(_nh);
 
-        quat_tf.setRPY(_rotate.x() * deg2rad, 
-            _rotate.y() * deg2rad, 
-            _rotate.z() * deg2rad); // Create this quaternion from roll/pitch/yaw (in radians)
-        q = tf2::toMsg(quat_tf);
-
-        trans.x = _translate.x();
-        trans.y = _translate.y();
-        trans.z = _translate.z();
-
-        transform.transform.translation = trans;
-        transform.transform.rotation = q;
-        transform.child_frame_id = "/base";
-        transform.header.frame_id = "/map";
-
-        tf2::doTransform(full_cloud, transformed_cloud, transform);
-
-        pcl::PointCloud<pcl::PointXYZ>::Ptr transformed_cloud_pcl = _common.ros2pcl_converter(transformed_cloud);
-        printf("%s[main.cpp] Completed transformed_cloud to ROS message\n", KGRN);
-        size_t transformed_len = transformed_cloud_pcl->points.size();
-        printf("%s[main.cpp] transformed_cloud_pcl size = %d\n", KGRN, transformed_len);
-
-        // Cropped Cloud
-        // pcl::PointCloud<pcl::PointXYZ>::Ptr cropped_cloud_pcl = _common.pcl2_filter_ptr(transformed_cloud_pcl, 
-        //     _centroid, dimension);
-
-        pcl::PointCloud<pcl::PointXYZ>::Ptr cropped_cloud_pcl = _common.pcl2_filter_ptr_original(transformed_cloud_pcl, 
-            _max, _min);
-        
-        sensor_msgs::PointCloud2 cropped_cloud = _common.pcl2ros_converter(cropped_cloud_pcl);
-        printf("%s[main.cpp] Completed cropped_cloud to ROS message\n", KGRN);
-        size_t cropped_len = cropped_cloud_pcl->points.size();
-        printf("%s[main.cpp] cropped_cloud_pcl size = %d\n", KGRN, cropped_len);
-
-        db_pcl_cloud = cropped_cloud_pcl;
-        _dbscan.initialization(db_pcl_cloud, _resolution, _nearest_min_distance, 
-            (float)_eps, _min_cluster_pts);
-
-        // Filtering
-        pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_points_cloud = _dbscan.run_filtering(db_pcl_cloud);
-        sensor_msgs::PointCloud2 filtered_cloud = _common.pcl2ros_converter(filtered_points_cloud);
-        printf("%s[main.cpp] Completed filtered_cloud to ROS message\n", KGRN);
-        size_t filtered_len = filtered_points_cloud->points.size();
-        printf("%s[main.cpp] filtered_points_pcl size = %d\n", KGRN, filtered_len);
-
-        // Clustering
-        _dbscan.run_clustering(filtered_points_cloud);
-        pcl::PointCloud<pcl::PointXYZRGB>::Ptr clustered_points_cloud = _dbscan.get_clustered_cloud();
-        printf("%s[main.cpp] Completed Clustering from dbscan\n", KGRN);
-        sensor_msgs::PointCloud2 clustered_cloud = _common.pclcolor2ros_converter(clustered_points_cloud);
-        printf("%s[main.cpp] Completed clustered_cloud to ROS message\n", KGRN);
-
-        // Choose which altered cloud that you want to publish
-        // ros_node_class.pcl_altered = transformed_cloud;
-        // ros_node_class.pcl_altered = cropped_cloud;
-        ros_node_class.pcl_altered = filtered_cloud;
-
-        ros_node_class.pcl_clustered = clustered_cloud;
-
-        ros_node_class.pcl_original = full_cloud;
-
-        int total_cluster_size = _dbscan.get_cluster_pc_size();
-        for (int i = 0; i < total_cluster_size; i++)
-        {
-            pcl::PointCloud<pcl::PointXYZ>::Ptr test_cloud = _dbscan.get_cluster_pc_info(i);
-            printf("%s[main.cpp] Query cloud idx %d with cluster cloud size %lu\n", KGRN, i, test_cloud->points.size());
-            Vector3d centroid = _common.normalize_all_points(test_cloud);
-            printf("%s[main.cpp] Centroid of Query cloud idx %d = %lf %lf %lf\n", KMAG, i, centroid.x(), centroid.y(), centroid.z());
-            geometry_msgs::Point tmp_point;
-            tmp_point.x = centroid.x();
-            tmp_point.y = centroid.y();
-            tmp_point.z = centroid.z();
-            ros_node_class.center_points.push_back(tmp_point);
-        }
-        ros_node_class.main_store_cluster_pc = _dbscan.get_cluster_pc();
-
-        ros_node_class.full_pcl_publisher();
-        ros_node_class.altered_pcl_publisher();
-        ros_node_class.cluster_pcl_publisher();
-        ros_node_class.object_center_publisher();
-        ros_node_class.custom_cluster_publisher();
+    while(ros::ok() && count < 1)
+    {
+        ros_node_class.pcl_publisher();
+        ros_node_class.rrt_param_publisher();
 
         ros::spinOnce();
 
-        loop_rate.sleep();
-
-        if (_spin_once)
-        {
-            return 0;
-        }
+        ros::Duration(1).sleep();
+        count++;
     }
 
     return 0;
-
-    
 }

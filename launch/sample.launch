@@ -1,11 +1,8 @@
 <launch>
 
-<!-- Publish PCL using : -->
-<!-- rosrun pcl_ros pcd_to_pointcloud <pcl_file_name>.pcd 0.1 _frame_id:=/map -->
-
 <node pkg="swarm_param" type="swarm_param_node" name="swarm_param_node" output="screen">
   <param name="pcd_file_location" type="string" value="$(find swarm_param)/cloud.pcd"/>
-  <remap from="/pcl" to="/cloud_pcd"/>
+  <rosparam command="load" file="$(find swarm_param)/config/rrt_parameters.yaml" />
 </node>
 
 </launch>
