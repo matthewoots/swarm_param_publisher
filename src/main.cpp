@@ -58,18 +58,19 @@ class ros_node_class
 {
 private:
     ros::NodeHandle _nh;
-    ros::Publisher pcl_pub, solo_setting_pub, formation_setting_pub;
+    //ros::Publisher pcl_pub, solo_setting_pub, formation_setting_pub;
     std::string _file_location;
 
 public:
 
     double f_v[param_size], s_v[param_size];
+    ros::Publisher pcl_pub, solo_setting_pub, formation_setting_pub;
 
     ros_node_class(ros::NodeHandle &nodeHandle)
     {
-        pcl_pub = _nh.advertise<sensor_msgs::PointCloud2>("/param/pcl", 10);
-        formation_setting_pub = _nh.advertise<std_msgs::Float32MultiArray>("/param/formation_settings", 10);
-        solo_setting_pub = _nh.advertise<std_msgs::Float32MultiArray>("/param/solo_settings", 10);
+        pcl_pub = _nh.advertise<sensor_msgs::PointCloud2>("/param/pcl", 100, true);
+        formation_setting_pub = _nh.advertise<std_msgs::Float32MultiArray>("/param/formation_settings", 100, true);
+        solo_setting_pub = _nh.advertise<std_msgs::Float32MultiArray>("/param/solo_settings", 100, true);
 
         std::string node_name = ros::this_node::getName();
         _nh.param<std::string>("/" + node_name + "/pcd_file_location", _file_location, "/cloud.pcd");
@@ -113,16 +114,25 @@ public:
         // Convert point cloud from pcl point ptr to ROS sensor message
         pcl::PointCloud<pcl::PointXYZ>::Ptr cloud(new pcl::PointCloud<pcl::PointXYZ>); // Initialize the point cloud
     
-        pcl::io::loadPCDFile<pcl::PointXYZ>(_file_location, *cloud);// Load the pcd file
-        printf("%s[main.cpp] Loaded .pcd cloud from %s\n", KGRN, _file_location.c_str());
+        std::ifstream file(_file_location);
+    	if(!file.good())            // If the file was not found, then file is 0, i.e. !file=1 or true.
+	{
+	    printf("%s[main.cpp] No pcd file found\n", KRED);
+	    return;
+	}
+	else
+	{
+            pcl::io::loadPCDFile<pcl::PointXYZ>(_file_location, *cloud);// Load the pcd file
+            printf("%s[main.cpp] Loaded .pcd cloud from %s\n", KGRN, _file_location.c_str());
 
-        sensor_msgs::PointCloud2 full_cloud;
-        pcl::toROSMsg(*cloud, full_cloud);
-        printf("%s[main.cpp] Completed cloud to ROS message\n", KGRN);
+            sensor_msgs::PointCloud2 full_cloud;
+            pcl::toROSMsg(*cloud, full_cloud);
+            printf("%s[main.cpp] Completed cloud to ROS message\n", KGRN);
 
-        full_cloud.header.stamp = ros::Time::now();
-        full_cloud.header.frame_id = "/map";
-        pcl_pub.publish(full_cloud); 
+            full_cloud.header.stamp = ros::Time::now();
+            full_cloud.header.frame_id = "/map_nwu";
+            pcl_pub.publish(full_cloud); 
+        }
     }
 
     void rrt_param_publisher()
@@ -132,6 +142,7 @@ public:
         {
             formation.data.push_back(f_v[i]);
             solo.data.push_back(s_v[i]);
+	        printf("%s[main.cpp] %d formation %lf and solo %lf\n", KGRN, i, f_v[i], s_v[i]);
         }
 
         formation_setting_pub.publish(formation);
@@ -147,14 +158,20 @@ int main(int argc, char **argv)
     ros::NodeHandle _nh("~"); 
     ros_node_class ros_node_class(_nh);
 
-    while(ros::ok() && count < 1)
+    //while (ros_node_class.formation_setting_pub.getNumSubscribers() == 0)
+	//ros::Duration(1).sleep();
+
+    //while (ros_node_class.solo_setting_pub.getNumSubscribers() == 0)
+	//ros::Duration(1).sleep();
+
+    while(ros::ok() && count < 3)
     {
         ros_node_class.pcl_publisher();
         ros_node_class.rrt_param_publisher();
 
         ros::spinOnce();
 
-        ros::Duration(1).sleep();
+        ros::Duration(0.5).sleep();
         count++;
     }
 

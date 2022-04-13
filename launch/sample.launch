@@ -1,7 +1,11 @@
 <launch>
 
 <node pkg="swarm_param" type="swarm_param_node" name="swarm_param_node" output="screen">
-  <param name="pcd_file_location" type="string" value="$(find swarm_param)/cloud.pcd"/>
+  <param name="pcd_file_location" type="string" value="$(find swarm_param)/hunted_0.pcd"/>
+  <!-- <param name="pcd_file_location" type="string" value="$(find swarm_param)/no_cloud.pcd"/> -->
+  <!--<param name="pcd_file_location" type="string" value="$(find swarm_param)/wall_0.pcd"/> -->
+
+  <param name="no_pcd" value="true"/>
   <rosparam command="load" file="$(find swarm_param)/config/rrt_parameters.yaml" />
 </node>
 
